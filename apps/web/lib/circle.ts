@@ -86,6 +86,15 @@ export async function createUserToken(userId: string) {
   });
 }
 
+/** Social-login users: a new user token from the refresh token returned at sign-in. */
+export async function refreshUserToken(userToken: string, refreshToken: string, deviceId: string) {
+  return circleFetch<{ userToken: string; encryptionKey: string; refreshToken?: string }>("/v1/w3s/users/token/refresh", {
+    method: "POST",
+    userToken,
+    body: { idempotencyKey: randomUUID(), refreshToken, deviceId },
+  });
+}
+
 export async function initializeUser(userToken: string) {
   return circleFetch<{ challengeId: string }>("/v1/w3s/user/initialize", {
     method: "POST",

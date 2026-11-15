@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Be_Vietnam_Pro } from "next/font/google";
 import type { ReactNode } from "react";
 import Footer from "@/components/Footer";
+import SignInChooser from "@/components/SignInChooser";
 import Header from "@/components/Header";
 import { I18nProvider } from "@/components/I18nProvider";
 import MobileNav from "@/components/MobileNav";
@@ -49,6 +50,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           {/* Keeps the footer clear of the mobile bottom nav. */}
           <div className="h-[calc(4rem+env(safe-area-inset-bottom))] md:hidden" aria-hidden />
           <MobileNav />
+          <SignInChooser />
         </I18nProvider>
       </body>
     </html>

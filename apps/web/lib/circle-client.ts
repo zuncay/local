@@ -23,8 +23,31 @@ export type CircleSession = {
   email?: string;
   walletId?: string;
   walletAddress?: string;
+  /** Google sessions: used to get a new user token without signing in again. */
+  refreshToken?: string;
+  deviceId?: string;
   savedAt: number;
 };
+
+/** Fired on window to ask the user how to sign in (see SignInChooser). */
+export const SIGNIN_CHOOSE_EVENT = "toura-signin-choose";
+export type SignInMethod = "pin" | "google";
+
+/** True when Google sign-in is configured (users then choose Google or a PIN wallet). */
+export function googleEnabled() {
+  return !!GOOGLE_CLIENT_ID;
+}
+
+/** Ask the user to pick Google or a PIN wallet; null if they closed the chooser. */
+function chooseSignIn(): Promise<SignInMethod | null> {
+  return new Promise((resolve) => {
+    const ev = new CustomEvent<{ resolve: (m: SignInMethod | null) => void; handled: boolean }>(SIGNIN_CHOOSE_EVENT, {
+      detail: { resolve, handled: false },
+    });
+    window.dispatchEvent(ev);
+    if (!ev.detail.handled) resolve("pin"); // no chooser on the page: keep the old behaviour
+  });
+}
 
 export class CircleClientError extends Error {
   constructor(
@@ -40,11 +63,11 @@ export function circleConfigured() {
 }
 
 /**
- * How users connect: Google social login once NEXT_PUBLIC_GOOGLE_CLIENT_ID is
- * configured, otherwise a Circle PIN wallet (no third-party login needed).
+ * How the current (or last) session signed in: a Circle PIN wallet tied to this
+ * browser, or Google. Before any sign-in this is "pin".
  */
-export function authMode(): "pin" | "google" {
-  return GOOGLE_CLIENT_ID ? "google" : "pin";
+export function authMode(): SignInMethod {
+  return load<CircleSession>(SESSION_KEY)?.authMode ?? "pin";
 }
 
 function redirectUri() {
@@ -112,7 +135,7 @@ export async function startGoogleLogin(returnTo: string) {
     "/api/circle/device-token",
     { deviceId },
   );
-  store(DEVICE_KEY, { deviceToken, deviceEncryptionKey });
+  store(DEVICE_KEY, { deviceToken, deviceEncryptionKey, deviceId });
   store(RETURN_KEY, returnTo);
   sdk.updateConfigs({
     appSettings: { appId: APP_ID },
@@ -130,11 +153,11 @@ export async function startGoogleLogin(returnTo: string) {
  * makes it read the Google redirect and call back with the user token.
  */
 export async function completeGoogleLogin(): Promise<{ session: CircleSession; returnTo: string }> {
-  const device = load<{ deviceToken: string; deviceEncryptionKey: string }>(DEVICE_KEY);
+  const device = load<{ deviceToken: string; deviceEncryptionKey: string; deviceId?: string }>(DEVICE_KEY);
   if (!device) throw new CircleClientError("NO_DEVICE", "Login session not found — start again");
   const { W3SSdk } = await import("@circle-fin/w3s-pw-web-sdk");
 
-  const result = await new Promise<{ userToken: string; encryptionKey: string; email?: string }>((resolve, reject) => {
+  const result = await new Promise<{ userToken: string; encryptionKey: string; refreshToken?: string; email?: string }>((resolve, reject) => {
     const timer = setTimeout(() => reject(new CircleClientError("TIMEOUT", "Google login timed out")), 30_000);
     new W3SSdk(
       {
@@ -152,12 +175,13 @@ export async function completeGoogleLogin(): Promise<{ session: CircleSession; r
           return;
         }
         const email = "oAuthInfo" in res ? res.oAuthInfo?.socialUserInfo?.email : undefined;
-        resolve({ userToken: res.userToken, encryptionKey: res.encryptionKey, email });
+        const refreshToken = "refreshToken" in res ? (res as { refreshToken?: string }).refreshToken : undefined;
+        resolve({ userToken: res.userToken, encryptionKey: res.encryptionKey, refreshToken, email });
       },
     );
   });
 
-  const session: CircleSession = { ...result, authMode: "google", savedAt: Date.now() };
+  const session: CircleSession = { ...result, deviceId: device.deviceId, authMode: "google", savedAt: Date.now() };
   saveSession(session);
   const returnTo = load<string>(RETURN_KEY) ?? "/";
   store(RETURN_KEY, null);
@@ -243,7 +267,25 @@ async function pinSession(previous?: CircleSession | null): Promise<CircleSessio
 
 /** True when this browser has connected a PIN wallet before (even if the token expired). */
 export function hasPinWallet(): boolean {
-  return authMode() === "pin" && !!load<string>(PIN_USER_KEY) && !!load<CircleSession>(SESSION_KEY)?.walletAddress;
+  const s = load<CircleSession>(SESSION_KEY);
+  return (s?.authMode ?? "pin") === "pin" && !!load<string>(PIN_USER_KEY) && !!s?.walletAddress;
+}
+
+/** Google: a new user token from the refresh token Circle gave at sign-in. */
+async function googleRefresh(stale: CircleSession): Promise<CircleSession | null> {
+  if (!stale.refreshToken || !stale.deviceId) return null;
+  try {
+    const r = await postJson<{ userToken: string; encryptionKey: string; refreshToken?: string }>("/api/circle/refresh", {
+      userToken: stale.userToken,
+      refreshToken: stale.refreshToken,
+      deviceId: stale.deviceId,
+    });
+    const session: CircleSession = { ...stale, ...r, refreshToken: r.refreshToken ?? stale.refreshToken, savedAt: Date.now() };
+    saveSession(session);
+    return session;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -254,9 +296,8 @@ export async function getOrRefreshSession(): Promise<CircleSession | null> {
   const s = getSession();
   if (s) return s;
   const stale = load<CircleSession>(SESSION_KEY);
-  if (authMode() === "pin" && stale?.authMode === "pin" && load<string>(PIN_USER_KEY)) {
-    return pinSession(stale);
-  }
+  if (stale?.authMode === "pin" && load<string>(PIN_USER_KEY)) return pinSession(stale);
+  if (stale?.authMode === "google") return googleRefresh(stale);
   return null;
 }
 
@@ -268,7 +309,10 @@ export async function getOrRefreshSession(): Promise<CircleSession | null> {
  */
 export async function connectWallet(returnTo: string, onCreating?: () => void): Promise<CircleSession | null> {
   if (!circleConfigured()) throw new CircleClientError("NOT_CONFIGURED", "NEXT_PUBLIC_CIRCLE_APP_ID missing");
-  if (authMode() === "google") {
+  // With Google configured the user chooses; closing the chooser cancels (resolves null).
+  const method: SignInMethod | null = googleEnabled() ? await chooseSignIn() : "pin";
+  if (!method) return null;
+  if (method === "google") {
     await startGoogleLogin(returnTo);
     return null;
   }
