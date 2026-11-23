@@ -83,7 +83,7 @@ export default function PlaceCards({ places, saved, onToggleSave, onAdd, busy }:
             <div className="flex min-w-0 flex-1 flex-col p-3 sm:p-4">
               <div className="flex items-start justify-between gap-2">
                 <h3 className="line-clamp-2 font-display text-[15px] leading-snug font-bold sm:truncate">{name}</h3>
-                {p.source === "seed" && <span className="hidden shrink-0 text-[11px] font-semibold text-[#84918d] sm:inline">{t.curated}</span>}
+                {p.merchantId && <span className="hidden shrink-0 text-[11px] font-semibold text-accent sm:inline">{t.curated}</span>}
               </div>
               <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[#6f7d79]">
                 <span>

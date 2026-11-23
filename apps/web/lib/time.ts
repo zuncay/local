@@ -1,8 +1,8 @@
-import { CITY } from "./env";
+import { TIME_ZONE } from "./env";
 
-const TZ = CITY.timeZone;
+const TZ = TIME_ZONE;
 
-/** "14:30" in the demo city's local time. */
+/** "14:30" in Vietnam's local time. */
 export function hhmm(date: Date | string): string {
   return new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: false }).format(
     new Date(date),
@@ -27,7 +27,7 @@ export function localNowString(now = new Date()): string {
 
 /**
  * opening_hours evaluates rules in the *process* time zone. Build a Date whose
- * local wall-clock fields equal the demo city's wall clock, so evaluation is
+ * local wall-clock fields equal Vietnam's wall clock, so evaluation is
  * correct regardless of where the server runs.
  */
 export function toCityWallClock(date: Date): Date {

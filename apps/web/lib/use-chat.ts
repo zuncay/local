@@ -143,9 +143,10 @@ export function useChat(opts: {
           body: JSON.stringify({
             sessionId: sessionId ?? undefined,
             message: trimmed,
-            lat: start?.isGps ? start.lat : undefined,
-            lon: start?.isGps ? start.lon : undefined,
-            area: start?.isGps ? (optsRef.current.area ?? undefined) : undefined,
+            lat: start?.lat,
+            lon: start?.lon,
+            precise: start?.isGps ?? false,
+            area: optsRef.current.area ?? undefined,
             locale,
             userToken,
           }),

@@ -43,7 +43,7 @@ export async function clientReverse(lat: number, lon: number, locale: "vi" | "en
     const locality = clean(d.locality);
     const city = clean(d.city);
     const region = clean(d.principalSubdivision);
-    // "Vũng Tàu, Thành phố Hồ Chí Minh" / "Hội An, Đà Nẵng" / "Vung Tau, Ho Chi Minh City".
+    // "Thủ Đức, Thành phố Hồ Chí Minh" / "Hội An, Đà Nẵng" / "Thu Duc, Ho Chi Minh City".
     // City and province are often the same place spelled differently
     // ("Ho Chi Minh City" / "Ho Chi Minh"), so compare their core names.
     const sameCityAsRegion = !!city && !!region && core(city) === core(region);
@@ -53,10 +53,24 @@ export async function clientReverse(lat: number, lon: number, locale: "vi" | "en
     if (!parts.length) return null;
     return {
       label: parts.join(", "),
-      // Most local first — Vũng Tàu (now part of HCMC) still matches its own landmark.
+      // Most local first — a town merged into a bigger city still matches its own landmark.
       names: [locality, city, region].filter((x): x is string => !!x),
       country: d.countryName ?? null,
     };
+  } catch {
+    return null;
+  }
+}
+
+/** Rough position from the visitor's IP (no coordinates → BigDataCloud uses the IP). */
+export async function clientIpLocation(): Promise<{ lat: number; lon: number } | null> {
+  try {
+    const res = await fetch("https://api.bigdatacloud.net/data/reverse-geocode-client", { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return null;
+    const d = (await res.json()) as { latitude?: number; longitude?: number };
+    const lat = Number(d.latitude);
+    const lon = Number(d.longitude);
+    return Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0) ? { lat, lon } : null;
   } catch {
     return null;
   }

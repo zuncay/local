@@ -4,7 +4,7 @@
 // ChatSession and only ever appended to, so follow-up edits keep context.
 import Anthropic from "@anthropic-ai/sdk";
 import { prisma } from "./db";
-import { CITY, config } from "./env";
+import { config } from "./env";
 import { placeLabel, reverseGeocode } from "./geocode";
 import type { LatLon } from "./geo";
 import { executeTool, TOOLS } from "./ai-tools";
@@ -13,13 +13,13 @@ import { hhmm, localNowString } from "./time";
 import { currentWeather } from "./weather";
 import type { ChatEvent } from "./types";
 
-const SYSTEM_PROMPT = `Bạn là Toura, trợ lý du lịch địa phương tại khu vực hiện tại của user (xem "Khu vực" trong [Ngữ cảnh]; mặc định ${CITY.name}). Chỉ gợi ý địa điểm có trong kết quả tool search_places.
+const SYSTEM_PROMPT = `Bạn là Toura, trợ lý du lịch địa phương tại khu vực hiện tại của user (xem "Khu vực" trong [Ngữ cảnh]). Chỉ gợi ý địa điểm có trong kết quả tool search_places.
 Không bao giờ bịa tên/toạ độ. Lịch trình phải vừa khung giờ user cho, tính cả thời gian di chuyển từ get_route.
 Tôn trọng ngân sách (USDC). Trả lời ngắn gọn.
 
 Ngôn ngữ (bắt buộc):
 - Luôn trả lời bằng ngôn ngữ giao diện ghi trong [Ngữ cảnh] ("vi" = tiếng Việt, "en" = tiếng Anh), kể cả khi user gõ bằng ngôn ngữ khác.
-- Không trộn hai ngôn ngữ. Tiếng Việt thì không chen từ tiếng Anh (viết "cà phê nhìn ra biển", không viết "view biển"; "quán", không viết "merchant"; "quét mã QR", không viết "check-in"). Tiếng Anh thì viết địa danh và tên món không dấu (Vung Tau, banh khot, pho); chỉ giữ nguyên tên riêng của quán như trong dữ liệu.
+- Không trộn hai ngôn ngữ. Tiếng Việt thì không chen từ tiếng Anh (viết "cà phê nhìn ra biển", không viết "view biển"; "quán", không viết "merchant"; "quét mã QR", không viết "check-in"). Tiếng Anh thì viết địa danh và tên món không dấu (Da Lat, banh xeo, pho); chỉ giữ nguyên tên riêng của quán như trong dữ liệu.
 - build_itinerary nhận tên chuyến và note bằng CẢ HAI ngôn ngữ: title_vi/note_vi viết thuần tiếng Việt, title_en/note_en là bản tiếng Anh cùng nội dung (tên địa điểm giữ nguyên). App hiển thị theo ngôn ngữ user đang chọn.
 Khi lịch trình xong, gọi build_itinerary để lưu và trả JSON.
 
@@ -56,9 +56,9 @@ function client() {
 type Msg = Anthropic.MessageParam;
 
 
-async function contextBlock(sessionId: string, start: LatLon, startIsGps: boolean, locale: string, areaHint?: string): Promise<string> {
+async function contextBlock(sessionId: string, start: LatLon, precise: boolean, locale: string, areaHint?: string): Promise<string> {
   // Area name: from the browser geocode if given, else server-side (Photon).
-  const area = startIsGps ? (areaHint ?? placeLabel(await reverseGeocode(start.lat, start.lon))) : null;
+  const area = areaHint ?? placeLabel(await reverseGeocode(start.lat, start.lon));
   const session = await prisma.chatSession.findUnique({
     where: { id: sessionId },
     include: { itinerary: { include: { stops: { orderBy: { order: "asc" } } } } },
@@ -78,8 +78,8 @@ async function contextBlock(sessionId: string, start: LatLon, startIsGps: boolea
   return [
     "[Ngữ cảnh]",
     `Giờ địa phương: ${localNowString()}`,
-    `Khu vực: ${area ?? (startIsGps ? "không xác định được tên" : CITY.name)}`,
-    `Điểm xuất phát: ${start.lat.toFixed(5)}, ${start.lon.toFixed(5)} (${startIsGps ? "GPS của user" : `mặc định: trung tâm ${CITY.name}`})`,
+    `Khu vực: ${area ?? "không xác định được tên"}`,
+    `Điểm xuất phát: ${start.lat.toFixed(5)}, ${start.lon.toFixed(5)} (${precise ? "GPS của user" : "vị trí gần đúng theo mạng của user, có thể lệch vài km; nếu user nói đang ở nơi khác thì nhắc user bật định vị"})`,
     `Ngôn ngữ giao diện: ${locale}`,
     `Thời tiết hiện tại: ${weather}`,
     `Lịch trình nháp hiện tại: ${current}`,
@@ -109,7 +109,7 @@ export async function runChatTurn(args: {
   sessionId: string;
   userText: string;
   start: LatLon;
-  startIsGps: boolean;
+  precise: boolean;
   area?: string;
   locale: string;
   send: (ev: ChatEvent) => void;
@@ -117,7 +117,7 @@ export async function runChatTurn(args: {
 }): Promise<void> {
   const { sessionId, send } = args;
   const session = await prisma.chatSession.findUniqueOrThrow({ where: { id: sessionId } });
-  const ctxText = await contextBlock(sessionId, args.start, args.startIsGps, args.locale, args.area);
+  const ctxText = await contextBlock(sessionId, args.start, args.precise, args.locale, args.area);
   // Repair what an interrupted earlier turn may have left, so one broken reply can't break the whole chat.
   const messages: Msg[] = repairHistory([...(JSON.parse(session.messages) as Msg[]), { role: "user", content: `${ctxText}\n\n${args.userText}` }]);
   await save(sessionId, messages);

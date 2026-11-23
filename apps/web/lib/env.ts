@@ -78,11 +78,5 @@ export const config = {
   },
 };
 
-/** Demo city. GPS positions further than MAX_DEMO_DISTANCE_KM fall back to the center. */
-export const CITY = {
-  name: "Vũng Tàu",
-  nameEn: "Vung Tau",
-  center: { lat: 10.346, lon: 107.0843 },
-  timeZone: "Asia/Ho_Chi_Minh",
-  maxDistanceKm: 30,
-} as const;
+/** Trip times are planned and shown in Vietnam time. */
+export const TIME_ZONE = "Asia/Ho_Chi_Minh";

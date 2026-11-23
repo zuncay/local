@@ -28,7 +28,7 @@ the venue; the stop is paid when every part is (or, once the trip is over, with 
 Anvil: 31 checks for prepaid shares and 27 for bill splitting (exact on-chain amounts, seats, wrong venue, parts that
 don't add up, redo before payment, double pay, closing a partly paid bill, per-member wallet history).
 
-The venue decides: `prepay: true` in [`apps/web/data/merchants.json`](apps/web/data/merchants.json) means it takes bookings. A trip with
+The venue decides: owners register their place in the partner portal and choose whether it takes bookings (`prepay: true`). A trip with
 nothing to prepay is simply **started** (no transaction) and paid stop by stop.
 
 ## How it works
@@ -78,7 +78,7 @@ Contract: [`contracts/src/TouraEscrow.sol`](contracts/src/TouraEscrow.sol) (escr
 | `/trips` | All trips: not paid / upcoming / done, plus "Up next". Works before you have a wallet |
 | `/trips/[id]` | One page per trip: **Plan → Pay (or Start) → Go & scan → Done**. Prepay / at-venue / yourself split, shortfall helper, scan-to-pay (release or enter the bill), directions, refund time, share |
 | `/wallet` | Balance, money held for trips, payment history |
-| `/merchant` | Partner portal: the venue's printable QR (works for bookings and walk-ins), or scan a guest's booking code |
+| `/merchant` | Partner portal: owners sign in, register their place (any OSM place, anywhere) to their wallet, then get the venue's printable QR or scan a guest's booking code |
 
 ## Run locally
 
@@ -103,7 +103,7 @@ Arc testnet: chain `5042002`, RPC `https://rpc.testnet.arc.io`, explorer `https:
 Root Directory **`apps/web`**, add a **Postgres** database (Vercel Storage → Neon, or any Postgres URL as `DATABASE_URL`),
 copy the other variables from `apps/web/.env` (`OPERATOR_PRIVATE_KEY` only in Vercel's environment settings, never in git),
 set `CRON_SECRET`, deploy. `npm run vercel-build` (from `vercel.json`) derives a Postgres schema from the SQLite one,
-creates the tables, seeds the partner venues and builds. Local development stays on SQLite.
+creates the tables, seeds `merchants.json` (removing the old demo venues) and builds. Local development stays on SQLite.
 Step by step (Vietnamese): [README.vi.md → Triển khai lên Vercel](README.vi.md#9-triển-khai-lên-vercel).
 
 ## What's verified
@@ -134,8 +134,8 @@ Stack: Next.js 15, React 19, Tailwind 4, Prisma (SQLite locally, Postgres on Ver
 ## Limits (MVP)
 
 - Check-in codes live in the browser that paid (like the PIN wallet). Losing browser data means that stop can't be checked in — its money is still refundable.
-- Pay-at-venue: the traveller types the bill; nothing stops them paying less than the venue asks (as with any QR transfer — the venue sees the amount arrive). Only three demo venues are partners; every other place is "pay yourself".
-- The partner portal has no login. Funds are safe (the contract only pays the right venue), but anyone can view a venue's revenue.
+- Pay-at-venue: the traveller types the bill; nothing stops them paying less than the venue asks (as with any QR transfer — the venue sees the amount arrive). Only venues registered in the portal are partners; every other place is "pay yourself".
+- Venue registration is not verified: any signed-in wallet can claim an unregistered place. Fine on testnet; production needs ownership checks.
 - The AI chat needs a signed-in wallet (Circle user token, verified server-side); limits: 20 messages/min per IP, 10/min and 200/day per wallet.
 - In-memory rate limits (per instance). Public OSM services are for demo use.
 

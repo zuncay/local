@@ -1,5 +1,4 @@
-import { CITY } from "./env";
-import { merchantsData, poisData } from "./data";
+import { prisma } from "./db";
 import { haversineKm, type LatLon } from "./geo";
 import { openDuringWindow } from "./hours";
 import { normalizeVi } from "./landmarks";
@@ -7,20 +6,6 @@ import { ofmPois } from "./ofm-pois";
 import { openingHoursFor, type OsmPoi } from "./overpass";
 import { photonAreaPois, photonDishPois } from "./photon-pois";
 import { CATEGORIES, unitPrice, type Category, type PriceSource } from "./pricing";
-
-export type SeedPoi = {
-  osmId: string;
-  name: string;
-  nameEn?: string;
-  lat: number;
-  lon: number;
-  category: Category;
-  priceUsdc?: number;
-  merchantId?: string;
-  openingHours?: string;
-  tags?: string[];
-  suggestedMin?: number;
-};
 
 export type Place = {
   osmId: string;
@@ -37,49 +22,26 @@ export type Place = {
   priceSource: PriceSource;
   merchantId?: string;
   suggestedMin?: number;
-  source: "seed" | "osm";
+  source: "osm";
 };
 
-export type MerchantSeed = { id: string; name: string; osmId: string; walletAddress: string };
-
-let seedCache: SeedPoi[] | null = null;
-let merchantCache: MerchantSeed[] | null = null;
-
-export function loadSeedPois(): SeedPoi[] {
-  if (!seedCache) {
-    seedCache = (poisData as { pois: SeedPoi[] }).pois;
-  }
-  return seedCache;
-}
-
-export function loadMerchantSeed(): MerchantSeed[] {
-  if (!merchantCache) {
-    merchantCache = (merchantsData as { merchants: MerchantSeed[] }).merchants;
-  }
-  return merchantCache;
-}
-
-/** Fallback merchant for paid stops whose place has no merchant wallet of its own. */
+/** Old shared demo wallet; not a venue (old trips may still reference it). */
 export const PARTNER_POOL_MERCHANT_ID = "m_partner";
 
-function fromSeed(p: SeedPoi): Place {
-  const price = unitPrice(p);
-  return {
-    osmId: p.osmId,
-    name: p.name,
-    nameEn: p.nameEn,
-    lat: p.lat,
-    lon: p.lon,
-    category: p.category,
-    openingHours: p.openingHours,
-    tags: p.tags,
-    priceUsdc: price.unit,
-    priceSource: price.source,
-    // Only real partner venues take USDC through Toura; the old partner pool is not one.
-    merchantId: p.merchantId === PARTNER_POOL_MERCHANT_ID ? undefined : p.merchantId,
-    suggestedMin: p.suggestedMin,
-    source: "seed",
-  };
+/** Partner venues registered in the portal, by OSM id (cached briefly). */
+let partnerCache: { at: number; byOsm: Map<string, string> } | null = null;
+export function clearPartnerCache() {
+  partnerCache = null;
+}
+async function partnersByOsm(): Promise<Map<string, string>> {
+  if (partnerCache && Date.now() - partnerCache.at < 30_000) return partnerCache.byOsm;
+  try {
+    const rows = await prisma.merchant.findMany({ where: { id: { not: PARTNER_POOL_MERCHANT_ID } }, select: { id: true, osmId: true } });
+    partnerCache = { at: Date.now(), byOsm: new Map(rows.map((m) => [m.osmId, m.id])) };
+  } catch {
+    partnerCache = { at: Date.now(), byOsm: new Map() };
+  }
+  return partnerCache.byOsm;
 }
 
 // Every place returned to the AI is remembered so build_itinerary can verify that
@@ -98,7 +60,7 @@ export type SearchParams = {
   limit?: number;
   windowStart?: Date;
   windowEnd?: Date;
-  /** Max time to wait for Overpass before answering with seed data only. */
+  /** Max time to wait for Overpass opening hours. */
   osmWaitMs?: number;
   /** Name keyword (e.g. a dish: "phở", "cơm tấm") — searches food places by name. */
   keyword?: string;
@@ -131,11 +93,9 @@ export async function searchPlaces(params: SearchParams): Promise<SearchResult[]
   const limit = Math.min(Math.max(params.limit ?? 15, 1), 40);
   const kw = params.keyword ? normalizeVi(params.keyword) : null;
 
-  let seed = loadSeedPois().map(fromSeed);
   let osm: OsmPoi[];
   const tiles = ofmPois(lat, lon, radiusM); // reliable CDN source (OSM data, no opening hours)
   if (kw) {
-    seed = seed.filter((p) => normalizeVi(p.name).includes(kw) || (p.tags ?? []).some((t) => normalizeVi(t.replace(/_/g, " ")).includes(kw)));
     const fromTiles = (await tiles).filter(
       (p) => (p.category === "restaurant" || p.category === "cafe") && normalizeVi(p.name).includes(kw),
     );
@@ -147,20 +107,14 @@ export async function searchPlaces(params: SearchParams): Promise<SearchResult[]
     if (osm.length < 10) osm = mergeOsm(osm, await photonAreaPois(lat, lon, radiusM));
   }
 
-  // Merge: seed wins (it has prices + merchants). Also drop OSM duplicates of seed
-  // entries that are the same place mapped as a different element.
+  const partners = await partnersByOsm();
   const merged = new Map<string, Place>();
-  for (const p of seed) merged.set(p.osmId, p);
   for (const o of osm) {
     if (merged.has(o.osmId)) continue;
     // Some OSM "names" are really descriptions/reviews — not usable as a place name.
     if (o.name.length > 60) continue;
-    const dup = seed.some(
-      (s) => s.name.toLowerCase() === o.name.toLowerCase() && haversineKm(s, o) < 0.3,
-    );
-    if (dup) continue;
     const price = unitPrice({ category: o.category });
-    merged.set(o.osmId, { ...o, priceUsdc: price.unit, priceSource: price.source, source: "osm" });
+    merged.set(o.osmId, { ...o, priceUsdc: price.unit, priceSource: price.source, merchantId: partners.get(o.osmId), source: "osm" });
   }
 
   const here: LatLon = { lat, lon };
@@ -169,13 +123,13 @@ export async function searchPlaces(params: SearchParams): Promise<SearchResult[]
     .filter((p) => p.distanceM <= radiusM)
     .filter((p) => cats.length === 0 || cats.includes(p.category));
 
-  // Seed places first (curated, have prices/merchants), then by distance.
-  results.sort((a, b) => (a.source === b.source ? a.distanceM - b.distanceM : a.source === "seed" ? -1 : 1));
+  // Partner venues first, then by distance.
+  results.sort((a, b) => (!!a.merchantId === !!b.merchantId ? a.distanceM - b.distanceM : a.merchantId ? -1 : 1));
   if (params.mixCategories) results = mixByCategory(results);
 
   // Opening hours (tiles don't carry them): ask Overpass by id for the candidates only.
   results = results.slice(0, limit * 2);
-  const needHours = results.filter((p) => p.source === "osm" && !p.openingHours).map((p) => p.osmId);
+  const needHours = results.filter((p) => !p.openingHours).map((p) => p.osmId);
   if (needHours.length) {
     const hours = await openingHoursFor(needHours, params.osmWaitMs ?? 4000);
     for (const p of results) if (!p.openingHours && hours.has(p.osmId)) p.openingHours = hours.get(p.osmId);
@@ -190,21 +144,27 @@ export async function searchPlaces(params: SearchParams): Promise<SearchResult[]
   return results;
 }
 
-/** Places for the map layer: seed + OSM around a point, no opening-hours filter. */
+/** Places for the map layer: OSM around a point, no opening-hours filter. */
 export async function placesForMap(lat: number, lon: number, radiusM: number, keyword?: string): Promise<SearchResult[]> {
   return searchPlaces({ lat, lon, radiusM, limit: 40, osmWaitMs: 3_000, keyword, mixCategories: !keyword });
 }
 
 /**
- * Look up a place the AI referenced. Only places previously returned by search
- * (or seed data) are accepted. After a server restart, re-search around the city.
+ * Look up a place the AI referenced. Only places previously returned by search are
+ * accepted. After a server restart, re-search around the trip's starting point.
  */
-export async function resolvePlace(osmId: string, near?: LatLon): Promise<Place | null> {
+export async function resolvePlace(osmId: string, near: LatLon): Promise<Place | null> {
   const hit = known.get(osmId);
   if (hit) return hit;
-  const seed = loadSeedPois().find((p) => p.osmId === osmId);
-  if (seed) return fromSeed(seed);
-  const center = near ?? CITY.center;
-  await searchPlaces({ lat: center.lat, lon: center.lon, radiusM: 8000, limit: 40 });
+  await searchPlaces({ lat: near.lat, lon: near.lon, radiusM: 8000, limit: 40 });
   return known.get(osmId) ?? null;
+}
+
+/** A place near a point, for registering a venue (not limited to what the AI has seen). */
+export async function findPlaceNear(osmId: string, near: LatLon): Promise<Place | null> {
+  const hit = known.get(osmId);
+  if (hit) return hit;
+  // `near` is the place's own position: nearest-first within a few hundred metres finds it.
+  const list = await searchPlaces({ lat: near.lat, lon: near.lon, radiusM: 400, limit: 40, osmWaitMs: 1_500 });
+  return list.find((p) => p.osmId === osmId) ?? null;
 }

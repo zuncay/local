@@ -2,7 +2,6 @@ import { z } from "zod";
 import { classifyAgentError, runChatTurn } from "@/lib/agent";
 import { ApiError, clientIp, handle, jsonError, parseJson } from "@/lib/api";
 import { prisma } from "@/lib/db";
-import { CITY } from "@/lib/env";
 import { rateLimit } from "@/lib/rate-limit";
 import type { ChatEvent } from "@/lib/types";
 import { walletForToken } from "@/lib/wallet-auth";
@@ -18,6 +17,8 @@ const Body = z.object({
   lon: z.number().min(-180).max(180).optional(),
   locale: z.enum(["vi", "en"]).default("vi"),
   area: z.string().trim().max(160).optional(),
+  // false: an approximate position from the network, not GPS.
+  precise: z.boolean().default(true),
   // Circle user token: the AI is only for signed-in wallets (keeps spam and cost down).
   userToken: z.string().min(10).max(4000).optional(),
 });
@@ -53,18 +54,20 @@ export const POST = handle(async (req: Request) => {
     }
   }
 
-  // Starting point: the user's GPS wherever they are; Vũng Tàu center without GPS.
-  let start: { lat: number; lon: number } = CITY.center;
-  let startIsGps = false;
-  if (body.lat !== undefined && body.lon !== undefined) {
-    start = { lat: body.lat, lon: body.lon };
-    startIsGps = true;
-  }
-
   let session = body.sessionId ? await prisma.chatSession.findUnique({ where: { id: body.sessionId } }) : null;
   // A chat belongs to the wallet that started it: another wallet's id just starts a fresh chat,
   // and an older chat without an owner is claimed by the first wallet that continues it.
   if (session?.walletAddress && session.walletAddress !== wallet) session = null;
+
+  // Starting point: where the user is (GPS, or roughly from their network). A chat that
+  // already has one keeps going from it if the position is missing this time.
+  let start: { lat: number; lon: number };
+  let precise = body.precise;
+  if (body.lat !== undefined && body.lon !== undefined) start = { lat: body.lat, lon: body.lon };
+  else if (session?.startLat != null && session.startLon != null) {
+    start = { lat: session.startLat, lon: session.startLon };
+    precise = false;
+  } else throw new ApiError(400, "LOCATION_REQUIRED", "Turn on location so the AI knows where you are");
   if (session && !session.walletAddress) {
     session = await prisma.chatSession.update({ where: { id: session.id }, data: { walletAddress: wallet } });
   }
@@ -93,7 +96,7 @@ export const POST = handle(async (req: Request) => {
       const signal = AbortSignal.any([req.signal, deadline]);
       send({ type: "session", sessionId });
       try {
-        await runChatTurn({ sessionId, userText: body.message, start, startIsGps, area: body.area, locale: body.locale, send, signal });
+        await runChatTurn({ sessionId, userText: body.message, start, precise, area: body.area, locale: body.locale, send, signal });
       } catch (err) {
         const { code, message } = deadline.aborted ? { code: "AI_TIMEOUT", message: "AI timed out" } : classifyAgentError(err);
         if (!req.signal.aborted) console.error("[chat] turn failed", err);

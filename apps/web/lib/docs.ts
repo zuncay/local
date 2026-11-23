@@ -140,7 +140,7 @@ const vi: Docs = {
       id: "chu-quan",
       title: "Dành cho chủ quán",
       steps: [
-        "Mở cổng đối tác và chọn quán của bạn.",
+        "Mở cổng đối tác, đăng nhập ví, rồi đứng tại quán bấm tìm và chọn đúng quán của bạn. Chọn có nhận đặt chỗ hay không.",
         "In hoặc lưu mã QR của quán, đặt ở quầy. Khách quét để trả, dù đã đặt trước hay trả tại chỗ.",
         "Cũng có thể quét mã QR của khách. Tiền về thẳng ví của quán, xem được số dư và giao dịch ngay trong cổng.",
       ],
@@ -274,7 +274,7 @@ const en: Docs = {
       id: "venues",
       title: "For venues",
       steps: [
-        "Open the partner portal and pick your venue.",
+        "Open the partner portal, sign in with your wallet, then at your venue search and pick it. Choose whether you take bookings.",
         "Print or save your venue's QR code and put it at the counter. Guests scan it to pay, whether they booked or just walked in.",
         "You can also scan a guest's QR code. Money goes straight to your wallet; the portal shows the balance and payments.",
       ],

@@ -35,7 +35,7 @@ export function normalizeVi(s: string): string {
 
 /**
  * Pick the landmark for a reverse-geocoded place. Fields are checked from the
- * most local (locality/district) to the province, so Vũng Tàu (now part of
+ * most local (locality/district) to the province, so a merged town (now part of
  * Hồ Chí Minh City) still gets its own landmark.
  */
 export function findLandmark(fields: (string | undefined)[]): Landmark | null {

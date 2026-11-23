@@ -9,6 +9,8 @@ import Scanner from "./Scanner";
 import { errorText } from "@/lib/error-text";
 import QRVoucher from "./QRVoucher";
 import { venuePayload } from "@/lib/venue-qr";
+import { connectWallet, getSession, SESSION_EVENT, type CircleSession } from "@/lib/circle-client";
+import type { MapPlace } from "@/lib/types";
 
 type Merchant = { id: string; name: string; walletAddress: string; prepay?: boolean };
 type Detail = {
@@ -41,23 +43,58 @@ export default function MerchantClient() {
   const [result, setResult] = useState<Result | null>(null);
   const [paste, setPaste] = useState("");
   const lastScan = useRef<{ text: string; at: number } | null>(null);
+  const [session, setSession] = useState<CircleSession | null>(null);
+  const [listed, setListed] = useState(false);
+  const [registering, setRegistering] = useState(false);
 
   useEffect(() => {
-    fetch("/api/merchant")
-      .then((r) => r.json())
-      .then((j: { merchants: Merchant[] }) => {
-        setMerchants(j.merchants ?? []);
+    const sync = () => setSession(getSession());
+    sync();
+    window.addEventListener(SESSION_EVENT, sync);
+    return () => window.removeEventListener(SESSION_EVENT, sync);
+  }, []);
+
+  // The venues paid to the signed-in wallet.
+  const wallet = session?.walletAddress ?? null;
+  const loadMine = useCallback(
+    async (prefer?: string) => {
+      if (!wallet) {
+        setMerchants([]);
+        setMerchantId("");
+        setListed(true);
+        return;
+      }
+      try {
+        const j = (await (await fetch(`/api/merchant?wallet=${wallet}`, { cache: "no-store" })).json()) as { merchants: Merchant[] };
+        const list = j.merchants ?? [];
+        setMerchants(list);
         let saved: string | null = null;
         try {
           saved = localStorage.getItem(MERCHANT_KEY);
         } catch {
           /* ignore */
         }
-        const pick = j.merchants?.find((m) => m.id === saved)?.id ?? j.merchants?.[0]?.id ?? "";
-        setMerchantId(pick);
-      })
-      .catch(() => setMerchants([]));
-  }, []);
+        setMerchantId(list.find((m) => m.id === (prefer ?? saved))?.id ?? list[0]?.id ?? "");
+      } catch {
+        setMerchants([]);
+      } finally {
+        setListed(true);
+      }
+    },
+    [wallet],
+  );
+  useEffect(() => {
+    void loadMine();
+  }, [loadMine]);
+
+  const signIn = async () => {
+    try {
+      const s = await connectWallet("/merchant");
+      if (s) setSession(s);
+    } catch {
+      /* the chooser shows its own errors */
+    }
+  };
 
   const loadDetail = useCallback(async (id: string) => {
     if (!id) return;
@@ -128,6 +165,16 @@ export default function MerchantClient() {
         {t.merchantTitle}
       </h1>
 
+      {!wallet ? (
+        <section className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+          <p className="text-sm text-ink-2">{t.merchantSignIn}</p>
+          <button type="button" onClick={() => void signIn()} className="min-h-11 rounded-xl bg-accent px-4 text-sm font-bold text-accent-ink">
+            {t.merchantSignInBtn}
+          </button>
+        </section>
+      ) : (
+        <>
+      {merchants.length > 0 && (
       <div className="space-y-2">
         <h2 id="merchant-pick" className="text-sm font-medium text-ink-2">
           {t.merchantSelect}
@@ -175,8 +222,25 @@ export default function MerchantClient() {
           })}
         </div>
       </div>
+      )}
+      {listed && merchants.length === 0 && <p className="text-sm text-ink-2">{t.merchantNone}</p>}
+      {listed && (merchants.length === 0 || registering ? (
+        <RegisterVenue
+          session={session!}
+          onDone={(m) => {
+            setRegistering(false);
+            void loadMine(m.id);
+          }}
+        />
+      ) : (
+        <button type="button" onClick={() => setRegistering(true)} className="min-h-11 text-sm font-semibold text-accent underline">
+          + {t.regAdd}
+        </button>
+      ))}
+        </>
+      )}
 
-      {detail && (
+      {detail && wallet && merchantId && (
         <section className="grid grid-cols-2 gap-3">
           <div className="rounded-2xl border border-line bg-surface p-3">
             <div className="text-xs text-ink-2">{t.merchantRevenue}</div>
@@ -201,7 +265,7 @@ export default function MerchantClient() {
         </section>
       )}
 
-      {merchantId && (
+      {merchantId && wallet && (
         <section className="space-y-3 rounded-2xl border border-line bg-surface p-4">
           <div>
             <h2 className="font-bold text-ink">{t.venueQrTitle}</h2>
@@ -292,5 +356,150 @@ export default function MerchantClient() {
         )}
       </section>
     </div>
+  );
+}
+
+/** Pick your place from the map data around you and register it to your wallet. */
+function RegisterVenue({ session, onDone }: { session: CircleSession; onDone: (m: Merchant) => void }) {
+  const { t } = useI18n();
+  const [state, setState] = useState<"idle" | "locating" | "loading" | "ok" | "nogps" | "error">("idle");
+  const [places, setPlaces] = useState<MapPlace[]>([]);
+  const [filter, setFilter] = useState("");
+  const [pick, setPick] = useState<MapPlace | null>(null);
+  const [prepay, setPrepay] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const find = () => {
+    setMsg(null);
+    setPick(null);
+    if (!("geolocation" in navigator)) return setState("nogps");
+    setState("locating");
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        setState("loading");
+        try {
+          const { latitude: lat, longitude: lon } = pos.coords;
+          const res = await fetch(`/api/places?lat=${lat}&lon=${lon}&radius=500`, { cache: "no-store" });
+          if (!res.ok) throw new Error(String(res.status));
+          const j = (await res.json()) as { places: MapPlace[] };
+          setPlaces([...j.places].sort((a, b) => (a.distanceM ?? 0) - (b.distanceM ?? 0)));
+          setState("ok");
+        } catch {
+          setState("error");
+        }
+      },
+      () => setState("nogps"),
+      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 0 },
+    );
+  };
+
+  const submit = async () => {
+    if (!pick) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/merchant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userToken: session.userToken, osmId: pick.osmId, lat: pick.lat, lon: pick.lon, prepay }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const e = (j as { error?: { code?: string; message?: string } }).error;
+        setMsg({ ok: false, text: errorText(t, e?.code, e?.message) });
+        return;
+      }
+      setMsg({ ok: true, text: t.regDone });
+      onDone((j as { merchant: Merchant }).merchant);
+    } catch {
+      setMsg({ ok: false, text: t.err.NETWORK });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const q = filter.trim().toLowerCase();
+  const shown = places.filter((p) => !p.merchantId && (!q || p.name.toLowerCase().includes(q)));
+
+  return (
+    <section className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+      <div>
+        <h2 className="font-bold text-ink">{t.regTitle}</h2>
+        <p className="mt-0.5 text-xs text-ink-2">{t.regHint}</p>
+      </div>
+      <button
+        type="button"
+        onClick={find}
+        disabled={state === "locating" || state === "loading"}
+        className="min-h-11 rounded-xl border border-accent/50 px-4 text-sm font-semibold text-accent disabled:opacity-50"
+      >
+        {state === "locating" || state === "loading" ? "…" : t.regFind}
+      </button>
+      {state === "nogps" && <p className="text-sm text-warn">{t.regNoGps}</p>}
+      {state === "error" && <p className="text-sm text-danger">{t.poiError}</p>}
+      {state === "ok" && (
+        <div className="space-y-2">
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder={t.regFilter}
+            aria-label={t.regFilter}
+            className="min-h-[44px] w-full rounded-xl border border-line bg-bg px-3 text-base text-ink"
+          />
+          {shown.length === 0 ? (
+            <p className="text-sm text-ink-2">{t.regEmpty}</p>
+          ) : (
+            <div role="radiogroup" aria-label={t.regTitle} className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+              {shown.map((p) => {
+                const on = pick?.osmId === p.osmId;
+                return (
+                  <button
+                    key={p.osmId}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    onClick={() => setPick(p)}
+                    className={`flex min-h-12 w-full items-center gap-3 rounded-xl border px-3 py-2 text-left ${on ? "border-accent bg-accent-soft" : "border-line bg-bg hover:border-accent/40"}`}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-white">{p.name}</span>
+                      <span className="text-xs text-ink-2">
+                        {t.category[p.category] ?? p.category} · {p.distanceM ?? 0} m
+                      </span>
+                    </span>
+                    {on && <Icon name="check" size={16} strokeWidth={2.6} className="shrink-0 text-accent" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      {pick && (
+        <div className="space-y-3 border-t border-line pt-3">
+          <label className="flex cursor-pointer items-start gap-3">
+            <input type="checkbox" checked={prepay} onChange={(e) => setPrepay(e.target.checked)} className="mt-1 h-5 w-5 shrink-0 accent-[var(--accent)]" />
+            <span>
+              <span className="block text-sm font-semibold text-ink">{t.regPrepay}</span>
+              <span className="block text-xs text-ink-2">{t.regPrepayHint}</span>
+            </span>
+          </label>
+          <button
+            type="button"
+            onClick={() => void submit()}
+            disabled={busy}
+            className="min-h-11 w-full rounded-xl bg-accent px-4 text-sm font-bold text-accent-ink disabled:opacity-50"
+          >
+            {busy ? "…" : `${t.regSubmit}: ${pick.name}`}
+          </button>
+        </div>
+      )}
+      {msg && (
+        <p role={msg.ok ? "status" : "alert"} className={`rounded-xl px-3 py-2 text-sm ${msg.ok ? "bg-ok-soft text-ok" : "bg-danger/10 text-danger"}`}>
+          {msg.text}
+        </p>
+      )}
+    </section>
   );
 }

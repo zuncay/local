@@ -7,8 +7,9 @@ function parse(value: string): OpeningHours | null {
   if (cache.has(value)) return cache.get(value)!;
   let oh: OpeningHours | null = null;
   try {
-    // Country context for public holidays (Vietnam). Unknown/invalid rules → null (treated as unknown).
-    oh = new OpeningHours(value, { lat: 10.346, lon: 107.0843, address: { country_code: "vn", state: "" } });
+    // Country context for public holidays (Vietnam); the point only matters for sunrise/sunset
+    // rules, so the middle of the country is close enough. Unknown/invalid rules → null.
+    oh = new OpeningHours(value, { lat: 16.05, lon: 108.2, address: { country_code: "vn", state: "" } });
   } catch {
     oh = null;
   }

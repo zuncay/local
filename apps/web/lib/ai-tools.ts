@@ -31,7 +31,7 @@ export const TOOLS: Anthropic.Tool[] = [
   {
     name: "search_places",
     description:
-      "Search real places near a point (OpenStreetMap via Overpass/Photon, plus curated Vung Tau seed data with merchants). Returns osmId, name, coordinates, category, tags/cuisine, opening hours, per-person priceUsdc (priceSource 'estimate' means a category estimate) and whether the place is open during the given time window. Places closed during the window are excluded. Only places returned here may be used in an itinerary.",
+      "Search real places near a point (OpenStreetMap via vector tiles/Photon; places whose venue registered as a Toura partner carry a merchantId). Returns osmId, name, coordinates, category, tags/cuisine, opening hours, per-person priceUsdc (priceSource 'estimate' means a category estimate) and whether the place is open during the given time window. Places closed during the window are excluded. Only places returned here may be used in an itinerary.",
     input_schema: {
       type: "object",
       properties: {
@@ -265,11 +265,11 @@ async function runBuild(raw: unknown, ctx: ToolContext) {
 
   // Partner venues decide how they are paid: bookings are prepaid into the escrow,
   // walk-in venues are paid on arrival. Anywhere else is an estimate the traveller pays themselves.
-  const partners = new Map((await prisma.merchant.findMany()).filter((m) => m.id !== PARTNER_POOL_MERCHANT_ID).map((m) => [m.id, m]));
+  const partners = new Map((await prisma.merchant.findMany()).filter((m) => m.id !== PARTNER_POOL_MERCHANT_ID).map((m) => [m.osmId, m]));
   const stopsData = input.stops.map((s, i) => {
     const p = places[i];
     const price = partyPrice(p.priceUsdc, input.partySize);
-    const partner = price > 0 && p.merchantId ? partners.get(p.merchantId) : undefined;
+    const partner = price > 0 ? partners.get(p.osmId) : undefined;
     const payMode: PayMode = !(price > 0) ? "NONE" : !partner ? "SELF" : partner.prepay ? "ESCROW" : "VENUE";
     return {
       order: i,

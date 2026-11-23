@@ -7,9 +7,9 @@ import { describeWeather, weatherTip } from "@/lib/weather-codes";
 import { useI18n } from "../I18nProvider";
 import { fxDelay } from "@/lib/fx";
 
-export type GpsState = "locating" | "ok" | "denied" | "far";
+export type GpsState = "locating" | "ok" | "approx" | "denied";
 
-export type HereInfo = { lat: number; lon: number; label: string | null; kmToCity: number } | null;
+export type HereInfo = { lat: number; lon: number; label: string | null } | null;
 
 export type LocationInfo = {
   label: string | null;
@@ -34,10 +34,12 @@ type Props = {
   here: HereInfo;
   info: LocationInfo | null;
   infoLoading: boolean;
+  /** Where suggestions are centred (GPS or approximate), if known. */
+  point: { lat: number; lon: number } | null;
   onUpdateLocation: () => void;
 };
 
-export default function Hero({ gps, here, info, infoLoading, onUpdateLocation }: Props) {
+export default function Hero({ gps, here, info, infoLoading, point, onUpdateLocation }: Props) {
   const { t, locale } = useI18n();
 
   // Preload the landmark photo so the swap doesn't flash an empty frame.
@@ -54,20 +56,23 @@ export default function Hero({ gps, here, info, infoLoading, onUpdateLocation }:
     img.src = target;
   }, [target, info]);
 
-  // Sunset: from the weather service (local time at that place), else computed for Vũng Tàu.
+  // Sunset: from the weather service (local time at that place), else computed for the user's position.
   const sun = useMemo(() => {
-    if (info?.weather?.sunset) return { time: info.weather.sunset, place: info.label?.split(",")[0] ?? null };
-    const s = sunset(new Date(), 10.346, 107.0843);
-    return s ? { time: hhmm(s), place: locale === "vi" ? "Vũng Tàu" : "Vung Tau" } : null;
-  }, [info, locale]);
+    const place = info?.label?.split(",")[0] ?? null;
+    if (info?.weather?.sunset) return { time: info.weather.sunset, place };
+    const s = point ? sunset(new Date(), point.lat, point.lon) : null;
+    return s ? { time: hhmm(s), place } : null;
+  }, [info, point]);
 
   const where =
     gps === "locating"
       ? t.gpsLocating
       : gps === "denied"
         ? t.heroLocNoGps
-        : here?.label ?? info?.label ?? (here ? `${here.lat.toFixed(4)}, ${here.lon.toFixed(4)}` : t.gpsLocating);
-  const status = gps === "ok" ? t.heroInDemo : gps === "denied" ? t.heroLocDefault : null;
+        : gps === "approx"
+          ? (info?.label ?? t.heroLocApprox)
+          : here?.label ?? info?.label ?? (here ? `${here.lat.toFixed(4)}, ${here.lon.toFixed(4)}` : t.gpsLocating);
+  const status = gps === "ok" ? t.heroInDemo : gps === "approx" ? t.heroLocDefault : gps === "denied" ? t.heroLocNone : null;
 
   const w = info?.weather;
   const wd = w ? describeWeather(w.code, w.isDay, locale) : null;
