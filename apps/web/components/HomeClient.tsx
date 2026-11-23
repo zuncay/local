@@ -60,6 +60,7 @@ function MiniWallet() {
 export default function HomeClient() {
   const { t, locale } = useI18n();
   const [gps, setGps] = useState<GpsState>("locating");
+  const [blocked, setBlocked] = useState(false);
   const [here, setHere] = useState<HereInfo>(null);
   const [info, setInfo] = useState<LocationInfo | null>(null);
   const [infoLoading, setInfoLoading] = useState(false);
@@ -140,18 +141,30 @@ export default function HomeClient() {
       void approximate();
       return;
     }
+    const ok = (pos: GeolocationPosition) => {
+      const pt = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      setBlocked(false);
+      setHere({ ...pt, label: null, accuracy: Math.round(pos.coords.accuracy) });
+      setGps("ok");
+      setStart({ ...pt, isGps: true });
+      // Readable "district, city" + weather + landmark for where the user really is.
+      void loadInfo(pt, true);
+    };
+    const fail = (e: GeolocationPositionError) => {
+      // Refused: the browser won't ask again, so say how to allow it.
+      setBlocked(e.code === e.PERMISSION_DENIED);
+      void approximate();
+    };
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const pt = { lat: pos.coords.latitude, lon: pos.coords.longitude };
-        setHere({ ...pt, label: null });
-        setGps("ok");
-        setStart({ ...pt, isGps: true });
-        // Readable "district, city" + weather + landmark for where the user really is.
-        void loadInfo(pt, true);
+      ok,
+      (e) => {
+        if (e.code === e.PERMISSION_DENIED) return fail(e);
+        // Precise GPS timed out or isn't available (laptops, indoors): Wi-Fi/cell positioning
+        // is still far better than guessing from the network address.
+        navigator.geolocation.getCurrentPosition(ok, fail, { enableHighAccuracy: false, timeout: 15_000, maximumAge: 60_000 });
       },
-      () => void approximate(),
       // maximumAge 0: "Cập nhật" must re-read the position, not reuse a cached one.
-      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 0 },
+      { enableHighAccuracy: true, timeout: 12_000, maximumAge: 0 },
     );
   }, [loadInfo, approximate]);
 
@@ -290,7 +303,7 @@ export default function HomeClient() {
       <div className="glow -top-[260px] -right-[100px] bg-[#28d7a4]" aria-hidden />
       <div className="glow top-[900px] -left-[200px] bg-[#2ca9ff]" aria-hidden />
 
-      <Hero gps={gps} here={here} info={info} infoLoading={infoLoading} point={start} onUpdateLocation={locate} />
+      <Hero gps={gps} here={here} info={info} infoLoading={infoLoading} point={start} blocked={blocked} onUpdateLocation={locate} />
 
       <section
         id="explore"

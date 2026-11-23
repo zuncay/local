@@ -9,7 +9,7 @@ import { fxDelay } from "@/lib/fx";
 
 export type GpsState = "locating" | "ok" | "approx" | "denied";
 
-export type HereInfo = { lat: number; lon: number; label: string | null } | null;
+export type HereInfo = { lat: number; lon: number; label: string | null; accuracy?: number } | null;
 
 export type LocationInfo = {
   label: string | null;
@@ -36,10 +36,12 @@ type Props = {
   infoLoading: boolean;
   /** Where suggestions are centred (GPS or approximate), if known. */
   point: { lat: number; lon: number } | null;
+  /** The browser refused location access (it won't ask again on its own). */
+  blocked?: boolean;
   onUpdateLocation: () => void;
 };
 
-export default function Hero({ gps, here, info, infoLoading, point, onUpdateLocation }: Props) {
+export default function Hero({ gps, here, info, infoLoading, point, blocked, onUpdateLocation }: Props) {
   const { t, locale } = useI18n();
 
   // Preload the landmark photo so the swap doesn't flash an empty frame.
@@ -72,7 +74,20 @@ export default function Hero({ gps, here, info, infoLoading, point, onUpdateLoca
         : gps === "approx"
           ? (info?.label ?? t.heroLocApprox)
           : here?.label ?? info?.label ?? (here ? `${here.lat.toFixed(4)}, ${here.lon.toFixed(4)}` : t.gpsLocating);
-  const status = gps === "ok" ? t.heroInDemo : gps === "approx" ? t.heroLocDefault : gps === "denied" ? t.heroLocNone : null;
+  // A coarse fix (laptop without Wi-Fi positioning) can be kilometres off: say so.
+  const coarse = gps === "ok" && (here?.accuracy ?? 0) > 500;
+  const status =
+    gps === "ok"
+      ? coarse
+        ? t.heroLocCoarse.replace("{d}", here!.accuracy! >= 1000 ? `${(here!.accuracy! / 1000).toFixed(1)} km` : `${here!.accuracy} m`)
+        : t.heroInDemo
+      : blocked
+        ? t.heroLocBlocked
+        : gps === "approx"
+          ? t.heroLocDefault
+          : gps === "denied"
+            ? t.heroLocNone
+            : null;
 
   const w = info?.weather;
   const wd = w ? describeWeather(w.code, w.isDay, locale) : null;
@@ -98,7 +113,7 @@ export default function Hero({ gps, here, info, infoLoading, point, onUpdateLoca
           <div className="flex min-w-0 flex-1 flex-col" aria-live="polite">
             <small className="text-[11px] text-ink-2">{t.heroYourLocation}</small>
             <strong className="text-sm leading-snug">{where}</strong>
-            {status && <span className={`mt-0.5 text-[11px] leading-snug ${gps === "ok" ? "text-accent" : "text-warn"}`}>{status}</span>}
+            {status && <span className={`mt-0.5 text-[11px] leading-snug ${gps === "ok" && !coarse ? "text-accent" : "text-warn"}`}>{status}</span>}
           </div>
           <button
             type="button"
