@@ -61,6 +61,8 @@ type Props = {
   places: MapPlace[];
   itinerary: ItineraryView | null;
   t: Dict;
+  /** Live trip: stops already behind the traveller and the one they are heading to. */
+  live?: { doneIds: string[]; nextId: string | null };
 };
 
 function placesGeoJSON(places: MapPlace[], highlighted: Set<string>): GeoJSON.FeatureCollection {
@@ -104,12 +106,13 @@ export default function MapView(props: Props) {
   return <MapCanvas key={props.t.langToggle} {...props} />;
 }
 
-function MapCanvas({ center, user, places, itinerary, t }: Props) {
+function MapCanvas({ center, user, places, itinerary, t, live }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const userMarkerRef = useRef<maplibregl.Marker | null>(null);
   const stopMarkersRef = useRef<maplibregl.Marker[]>([]);
   const placesRef = useRef<MapPlace[]>(places);
+  const fittedRef = useRef<string | null>(null);
   const tRef = useRef(t);
   const [loaded, setLoaded] = useState(false);
 
@@ -207,25 +210,40 @@ function MapCanvas({ center, user, places, itinerary, t }: Props) {
     (map.getSource("places") as GeoJSONSource | undefined)?.setData(placesGeoJSON(places, inPlan));
   }, [places, itinerary, loaded]);
 
-  // User location marker.
+  // User location marker (moved, not recreated, as the position updates).
+  const userLat = user?.lat;
+  const userLon = user?.lon;
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    userMarkerRef.current?.remove();
-    userMarkerRef.current = null;
-    if (!user) return;
+    if (userLat === undefined || userLon === undefined) {
+      userMarkerRef.current?.remove();
+      userMarkerRef.current = null;
+      return;
+    }
+    if (userMarkerRef.current) {
+      userMarkerRef.current.setLngLat([userLon, userLat]);
+      return;
+    }
     const el = document.createElement("div");
     el.className = "user-dot";
-    userMarkerRef.current = new maplibregl.Marker({ element: el }).setLngLat([user.lon, user.lat]).addTo(map);
-  }, [user]);
+    userMarkerRef.current = new maplibregl.Marker({ element: el }).setLngLat([userLon, userLat]).addTo(map);
+  }, [userLat, userLon]);
 
   // Re-center when the starting point changes (GPS resolved).
   useEffect(() => {
     mapRef.current?.easeTo({ center: [center.lon, center.lat], duration: 600 });
   }, [center.lat, center.lon]);
 
-  // Itinerary: route line + numbered stop markers + fit bounds.
+  // Itinerary: route line + numbered stop markers + fit bounds (once per trip, so
+  // refreshes while travelling don't move the map under the user's fingers).
+  const itRef = useRef(itinerary);
+  itRef.current = itinerary;
+  const itKey = itinerary
+    ? `${itinerary.id}|${itinerary.stops.map((s) => s.id).join(",")}|${itinerary.geometry?.coordinates.length ?? 0}|${live?.doneIds.join(",") ?? ""}|${live?.nextId ?? ""}`
+    : "";
   useEffect(() => {
+    const itinerary = itRef.current;
     const map = mapRef.current;
     if (!map || !loaded) return;
     stopMarkersRef.current.forEach((m) => m.remove());
@@ -241,21 +259,26 @@ function MapCanvas({ center, user, places, itinerary, t }: Props) {
     const bounds = new maplibregl.LngLatBounds();
     itinerary.stops.forEach((s, i) => {
       const el = document.createElement("div");
-      el.className = "stop-pin";
-      el.textContent = String(i + 1);
+      const done = live?.doneIds.includes(s.id);
+      el.className = `stop-pin${done ? " done" : live?.nextId === s.id ? " next" : ""}`;
+      el.textContent = done ? "✓" : String(i + 1);
       const popup = new maplibregl.Popup({ offset: 18, closeButton: false }).setText(`${i + 1}. ${s.name} · ${hhmm(s.arriveAt)}`);
       stopMarkersRef.current.push(new maplibregl.Marker({ element: el }).setLngLat([s.lon, s.lat]).setPopup(popup).addTo(map));
       bounds.extend([s.lon, s.lat]);
     });
     itinerary.geometry?.coordinates.forEach((c) => bounds.extend(c));
-    if (!bounds.isEmpty()) {
+    // Refit when the plan itself changes (new trip or edited stops), not on status updates.
+    const planKey = `${itinerary.id}|${itinerary.stops.map((s) => s.osmId).join(",")}`;
+    if (!bounds.isEmpty() && fittedRef.current !== planKey) {
+      fittedRef.current = planKey;
       map.fitBounds(bounds, {
         padding: 50,
         maxZoom: 15,
         duration: 800,
       });
     }
-  }, [itinerary, loaded]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itKey, loaded]);
 
   // MapLibre adds `.maplibregl-map { position: relative }` (unlayered CSS beats
   // Tailwind's layered utilities), so size the map via a positioned wrapper.

@@ -110,6 +110,49 @@ body {
   cursor: pointer;
 }
 
+.stop-pin.done {
+  background: #70efc0;
+  color: #06221c;
+  border-color: #fff;
+}
+.stop-pin.next {
+  animation: fx-pin-pulse 1.8s ease-out infinite;
+}
+@keyframes fx-pin-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgb(112 239 192 / 0.6), 0 2px 8px rgb(0 0 0 / 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 16px rgb(112 239 192 / 0), 0 2px 8px rgb(0 0 0 / 0.35);
+  }
+}
+
+/* Payment moment: rings spread out from the check mark. */
+@keyframes fx-ring {
+  from {
+    transform: scale(0.6);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+.fx-ring {
+  animation: fx-ring 1.6s cubic-bezier(0.2, 0.7, 0.2, 1) infinite;
+}
+.fx-ring-late {
+  animation: fx-ring 1.6s cubic-bezier(0.2, 0.7, 0.2, 1) 0.8s infinite;
+}
+@keyframes fx-backdrop {
+  from {
+    opacity: 0;
+  }
+}
+.fx-backdrop {
+  animation: fx-backdrop 0.25s ease-out;
+}
+
 .toura-popup {
   font-family: var(--font-sans);
   color: #10211e;
@@ -440,7 +483,11 @@ body .maplibregl-cooperative-gesture-screen {
   .fx-aurora::before,
   .fx-skeleton::after,
   .fx-grow,
-  .fx-pop {
+  .fx-pop,
+  .fx-ring,
+  .fx-ring-late,
+  .fx-backdrop,
+  .stop-pin.next {
     animation: none !important;
   }
   .fx-shine::after,

@@ -21,6 +21,8 @@ import type { ItineraryView } from "@/lib/types";
 import { BackLink, DateBlock } from "../account/shared";
 import { useI18n } from "../I18nProvider";
 import GroupPanel from "./GroupPanel";
+import LiveTrip from "./LiveTrip";
+import ReleaseMoment from "./ReleaseMoment";
 import { PriceLabel } from "../ItineraryCard";
 import PaymentPanel from "./PaymentPanel";
 import VoucherPanel from "./VoucherPanel";
@@ -238,8 +240,12 @@ export default function TripDetail({ initial, explorerUrl, faucetUrl, feeEstimat
       ) : it.group && !(myShare(it, viewer) && myShare(it, viewer)!.status !== "PENDING") ? (
         <GroupStops it={it} />
       ) : (
-        <VoucherPanel it={forViewer(it, viewer)} onChange={setIt} explorerUrl={explorerUrl} />
+        <>
+          {it.status === "PAID" && it.stops.length > 0 && <LiveTrip it={forViewer(it, viewer)} />}
+          <VoucherPanel it={forViewer(it, viewer)} onChange={setIt} explorerUrl={explorerUrl} />
+        </>
       )}
+      <ReleaseMoment it={forViewer(it, viewer)} explorerUrl={explorerUrl} />
     </div>
   );
 }
