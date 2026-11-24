@@ -372,9 +372,7 @@ export default function PaymentPanel({ initial, faucetUrl, feeEstimate, payments
             <p className="text-sm text-ink">{hasPrepay ? t.openingQr : t.openingTrip}</p>
           </div>
         </section>
-      ) : expired || hidePay ? null : nothingInApp ? (
-        <p className="rounded-2xl bg-surface-2 p-4 text-sm text-ink">{Number(itinerary.totalUsdc) > 0 ? t.noInAppPay : t.freeItinerary}</p>
-      ) : !(hasPrepay ? paymentsConfigured : walletPaymentsConfigured) || !circleConfigured() ? (
+      ) : expired || hidePay ? null : !(hasPrepay ? paymentsConfigured : walletPaymentsConfigured) || !circleConfigured() ? (
         <p role="alert" className="rounded-2xl bg-danger/10 p-4 text-sm text-danger">
           {t.paymentsNotConfigured}
         </p>
@@ -483,7 +481,11 @@ export default function PaymentPanel({ initial, faucetUrl, feeEstimate, payments
                     : t.loginAndPay}
           </button>
           {!busy && short === 0 && (
-            <p className="text-center text-xs text-ink-2">{!hasPrepay ? t.startNote : session ? t.payConfirmNote : t.payHowNote}</p>
+            <p className="text-center text-xs text-ink-2">
+              {nothingInApp ? (Number(itinerary.totalUsdc) > 0 ? t.noInAppPay : t.freeItinerary) : !hasPrepay ? t.startNote : session ? t.payConfirmNote : t.payHowNote}
+              {/* Starting turns on the live trip: map, distance and arrival. */}
+              {!hasPrepay && <span className="mt-1 block text-accent">{t.startLiveNote}</span>}
+            </p>
           )}
           {(hasPrepay || hasVenue) && itinerary.partySize >= 2 && onEnableGroup && !busy && (
             <div className="border-t border-line pt-3">
