@@ -58,12 +58,14 @@ export default function LiveTrip({ it }: { it: ItineraryView }) {
   const meters = pos && target ? Math.round(haversineKm(pos, target) * 1000) : null;
   // A weak fix (indoors) gets a little more room, but never more than 150 m.
   const radius = pos ? Math.max(ARRIVE_M, Math.min(pos.accuracy, 150)) : ARRIVE_M;
-  const atTarget = !!target && (local.seen.includes(target.id) ? meters === null || meters <= LEAVE_M : meters !== null && meters <= radius);
+  const manual = !!target && !!local.here?.includes(target.id);
+  const atTarget =
+    !!target && (manual || (local.seen.includes(target.id) ? meters === null || meters <= LEAVE_M : meters !== null && meters <= radius));
 
   // Arriving: remember it and buzz once. Leaving a stop with nothing to pay moves on.
   const buzzed = useRef<string | null>(null);
   useEffect(() => {
-    if (!target || meters === null || !pos) return;
+    if (!target || meters === null || !pos || local.here?.includes(target.id)) return;
     // Already at a later stop (went straight there, or opened the app on another
     // device): the ones before it are behind the traveller.
     if (meters > radius) {
@@ -88,9 +90,11 @@ export default function LiveTrip({ it }: { it: ItineraryView }) {
     } else if (meters > LEAVE_M && local.seen.includes(target.id) && !owes(target)) {
       update((p) => ({ ...p, done: [...p.done, target.id] }));
     }
-  }, [target?.id, meters, radius, local.seen, update]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [target?.id, meters, radius, local.seen, local.here, update]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const finish = (s: StopView) => update((p) => ({ ...p, done: [...p.done, s.id] }));
+  // Without (good) GPS — indoors, a laptop, a demo — the traveller says they've arrived.
+  const imHere = (s: StopView) => update((p) => ({ ...p, seen: [...p.seen, s.id], here: [...(p.here ?? []), s.id] }));
   const payNow = () => document.getElementById("pay-by-scan")?.scrollIntoView({ behavior: "smooth", block: "center" });
 
   const center = useMemo(() => ({ lat: it.stops[0].lat, lon: it.stops[0].lon }), [it.stops[0].lat, it.stops[0].lon]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -184,10 +188,17 @@ export default function LiveTrip({ it }: { it: ItineraryView }) {
               >
                 🧭 {t.directions} ↗
               </a>
-              <button type="button" onClick={() => finish(target)} className="min-h-11 rounded-xl px-3 text-xs font-semibold text-ink-2 underline">
-                {t.liveSkip}
+              <button
+                type="button"
+                onClick={() => imHere(target)}
+                className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-accent-soft text-sm font-bold text-accent"
+              >
+                📍 {t.liveImHere}
               </button>
             </div>
+            <button type="button" onClick={() => finish(target)} className="min-h-10 w-full text-xs font-semibold text-ink-2 underline">
+              {t.liveSkip}
+            </button>
           </div>
         )}
       </div>

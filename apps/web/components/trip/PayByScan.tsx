@@ -175,6 +175,14 @@ export default function PayByScan({
   };
 
   const venue = (s: StopView) => merchantName(t, s.merchant) || s.name;
+  // Partner venues on this trip still waiting to be paid (for picking one without scanning).
+  const venuesHere = [
+    ...new Map(
+      it.stops
+        .filter((s) => s.status === "PENDING" && s.merchant && (s.payMode === "VENUE" || codes[s.id]))
+        .map((s) => [s.merchant!.id, s.merchant!]),
+    ).values(),
+  ];
 
   if (state.kind === "bill") {
     return (
@@ -192,6 +200,22 @@ export default function PayByScan({
       <div className="space-y-2 rounded-xl bg-bg/60 p-3">
         <p className="text-sm text-[#c5d8d1]">{t.scanVenueHint}</p>
         <Scanner onScan={onScan} autoStart once label={t.scanVenue} />
+        {/* No camera, or a code that won't scan: pick the venue you're at from this trip. */}
+        {venuesHere.length > 0 && (
+          <div className="space-y-1.5 border-t border-white/10 pt-2">
+            <p className="text-xs text-ink-2">{t.scanNoCamera}</p>
+            {venuesHere.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => onScan(venuePayload(m.id))}
+                className="flex min-h-11 w-full items-center gap-2 rounded-xl border border-line bg-surface px-3 text-left text-sm font-semibold text-ink hover:border-accent/50"
+              >
+                🏪 {t.scanAtVenue.replace("{name}", merchantName(t, m) || m.name)}
+              </button>
+            ))}
+          </div>
+        )}
         <button
           type="button"
           onClick={() => {

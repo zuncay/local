@@ -11,13 +11,16 @@ export const LEAVE_M = 250;
 
 const key = (itId: string) => `toura.live.${itId}`;
 
-/** Stop ids reached ("seen") and finished on this device ("done"). */
-export type LocalProgress = { seen: string[]; done: string[] };
+/**
+ * Stop ids reached ("seen") and finished on this device ("done"); "here": reached by
+ * tapping "I'm here" (no GPS needed, and moving away doesn't undo it).
+ */
+export type LocalProgress = { seen: string[]; done: string[]; here?: string[] };
 
 export function readProgress(itId: string): LocalProgress {
   try {
     const v = JSON.parse(localStorage.getItem(key(itId)) ?? "null") as LocalProgress | null;
-    return { seen: v?.seen ?? [], done: v?.done ?? [] };
+    return { seen: v?.seen ?? [], done: v?.done ?? [], here: v?.here ?? [] };
   } catch {
     return { seen: [], done: [] };
   }
