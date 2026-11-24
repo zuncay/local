@@ -6,7 +6,9 @@ import { ApiError, clientIp, handle, jsonError, parseJson, parseQuery } from "@/
 import { nativeUsdcBalance } from "@/lib/chain";
 import { prisma } from "@/lib/db";
 import { config } from "@/lib/env";
-import { clearPartnerCache, findPlaceNear, PARTNER_POOL_MERCHANT_ID } from "@/lib/places";
+import { normalizeVi } from "@/lib/landmarks";
+import { clearPartnerCache, findPlaceNear, PARTNER_POOL_MERCHANT_ID, PORTAL_PLACE_PREFIX } from "@/lib/places";
+import { CATEGORIES } from "@/lib/pricing";
 import { rateLimit } from "@/lib/rate-limit";
 import { walletForToken } from "@/lib/wallet-auth";
 
@@ -51,38 +53,49 @@ export const GET = handle(async (req: Request) => {
   });
 });
 
-const Register = z.object({
-  userToken: z.string().min(10).max(4000),
-  osmId: z.string().min(3).max(64),
-  // The place's own position (from the nearby list), to find it again on the server.
-  lat: z.number().min(-90).max(90),
-  lon: z.number().min(-180).max(180),
-  prepay: z.boolean().default(false),
-});
+const Register = z
+  .object({
+    userToken: z.string().min(10).max(4000),
+    // A place on the map (OpenStreetMap)…
+    osmId: z.string().min(3).max(64).optional(),
+    // …or a new venue that isn't on the map yet: its name and kind.
+    name: z.string().trim().min(2).max(60).optional(),
+    category: z.enum(CATEGORIES).optional(),
+    // The place's position (from the list), or where the owner put the pin for a new venue.
+    lat: z.number().min(-90).max(90),
+    lon: z.number().min(-180).max(180),
+    prepay: z.boolean().default(false),
+  })
+  .refine((b) => !!b.osmId || (!!b.name && !!b.category), { message: "osmId, or name and category, required" });
 
 /**
- * POST /api/merchant → a venue owner registers their place (any OSM place, anywhere).
- * Payments for it go to the signed-in wallet.
+ * POST /api/merchant → a venue owner registers their place: one on the map, or a new
+ * venue at a point they choose. Payments for it go to the signed-in wallet.
  */
 export const POST = handle(async (req: Request) => {
   if (!rateLimit(`merchant-register:${clientIp(req)}`, 10, 60_000).ok) return jsonError(429, "RATE_LIMITED", "Too many requests");
   const body = await parseJson(req, Register);
   const wallet = await walletForToken(body.userToken);
   if (!wallet) throw new ApiError(401, "WALLET_REQUIRED", "Sign in with your wallet first");
-  const place = await findPlaceNear(body.osmId, { lat: body.lat, lon: body.lon });
-  if (!place) throw new ApiError(404, "NOT_FOUND", "Place not found");
-  const taken = await prisma.merchant.findUnique({ where: { osmId: place.osmId } });
+  const id = `v_${randomBytes(6).toString("hex")}`;
+
+  let data: { name: string; osmId: string; lat: number; lon: number; category: string };
+  if (body.osmId) {
+    const place = await findPlaceNear(body.osmId, { lat: body.lat, lon: body.lon });
+    if (!place) throw new ApiError(404, "NOT_FOUND", "Place not found");
+    data = { name: place.name, osmId: place.osmId, lat: place.lat, lon: place.lon, category: place.category };
+  } else {
+    // The same name registered within ~100 m is almost certainly the same venue.
+    const near = await prisma.merchant.findMany({
+      where: { lat: { gte: body.lat - 0.001, lte: body.lat + 0.001 }, lon: { gte: body.lon - 0.001, lte: body.lon + 0.001 } },
+    });
+    const same = near.find((m) => normalizeVi(m.name) === normalizeVi(body.name!));
+    if (same) throw new ApiError(409, "CONFLICT", "This place is already registered");
+    data = { name: body.name!, osmId: `${PORTAL_PLACE_PREFIX}${id}`, lat: body.lat, lon: body.lon, category: body.category! };
+  }
+  const taken = await prisma.merchant.findUnique({ where: { osmId: data.osmId } });
   if (taken) throw new ApiError(409, "CONFLICT", "This place is already registered");
-  const merchant = await prisma.merchant.create({
-    data: {
-      id: `v_${randomBytes(6).toString("hex")}`,
-      name: place.name,
-      osmId: place.osmId,
-      walletAddress: getAddress(wallet),
-      prepay: body.prepay,
-    },
-  });
+  const merchant = await prisma.merchant.create({ data: { id, ...data, walletAddress: getAddress(wallet), prepay: body.prepay } });
   clearPartnerCache();
   return NextResponse.json({ merchant });
 });
-

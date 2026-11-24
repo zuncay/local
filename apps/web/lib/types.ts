@@ -103,7 +103,8 @@ export type MapPlace = {
   priceSource: "seed" | "estimate";
   merchantId?: string;
   distanceM: number;
-  source: "seed" | "osm";
+  /** "partner": a venue created in the partner portal (not on OpenStreetMap). */
+  source: "osm" | "partner";
   /** true/false from opening_hours at request time; null = unknown. */
   openNow?: boolean | null;
 };

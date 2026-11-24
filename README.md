@@ -78,7 +78,7 @@ Contract: [`contracts/src/TouraEscrow.sol`](contracts/src/TouraEscrow.sol) (escr
 | `/trips` | All trips: not paid / upcoming / done, plus "Up next". Works before you have a wallet |
 | `/trips/[id]` | One page per trip: **Plan → Pay (or Start) → Go & scan → Done**. Prepay / at-venue / yourself split, shortfall helper, scan-to-pay (release or enter the bill), directions, refund time, share |
 | `/wallet` | Balance, money held for trips, payment history |
-| `/merchant` | Partner portal: owners sign in, register their place (any OSM place, anywhere) to their wallet, then get the venue's printable QR or scan a guest's booking code |
+| `/merchant` | Partner portal: owners sign in, drop a pin on their venue and pick it from OSM, or create it if it isn't mapped yet (name + kind at the pin), registering it to their wallet, then get the venue's printable QR or scan a guest's booking code |
 
 ## Run locally
 

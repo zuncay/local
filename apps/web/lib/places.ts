@@ -22,26 +22,39 @@ export type Place = {
   priceSource: PriceSource;
   merchantId?: string;
   suggestedMin?: number;
-  source: "osm";
+  /** "partner": created in the partner portal, not on OpenStreetMap. */
+  source: "osm" | "partner";
 };
 
 /** Old shared demo wallet; not a venue (old trips may still reference it). */
 export const PARTNER_POOL_MERCHANT_ID = "m_partner";
 
-/** Partner venues registered in the portal, by OSM id (cached briefly). */
-let partnerCache: { at: number; byOsm: Map<string, string> } | null = null;
+/** Venues created in the portal (not on OpenStreetMap) use ids like "toura:v_…". */
+export const PORTAL_PLACE_PREFIX = "toura:";
+
+type PartnerRow = { id: string; osmId: string; name: string; lat: number | null; lon: number | null; category: string | null };
+
+/** Partner venues registered in the portal (cached briefly). */
+let partnerCache: { at: number; byOsm: Map<string, string>; own: PartnerRow[] } | null = null;
 export function clearPartnerCache() {
   partnerCache = null;
 }
-async function partnersByOsm(): Promise<Map<string, string>> {
-  if (partnerCache && Date.now() - partnerCache.at < 30_000) return partnerCache.byOsm;
+async function partners(): Promise<{ byOsm: Map<string, string>; own: PartnerRow[] }> {
+  if (partnerCache && Date.now() - partnerCache.at < 30_000) return partnerCache;
   try {
-    const rows = await prisma.merchant.findMany({ where: { id: { not: PARTNER_POOL_MERCHANT_ID } }, select: { id: true, osmId: true } });
-    partnerCache = { at: Date.now(), byOsm: new Map(rows.map((m) => [m.osmId, m.id])) };
+    const rows = await prisma.merchant.findMany({
+      where: { id: { not: PARTNER_POOL_MERCHANT_ID } },
+      select: { id: true, osmId: true, name: true, lat: true, lon: true, category: true },
+    });
+    partnerCache = {
+      at: Date.now(),
+      byOsm: new Map(rows.map((m) => [m.osmId, m.id])),
+      own: rows.filter((m) => m.osmId.startsWith(PORTAL_PLACE_PREFIX) && m.lat !== null && m.lon !== null),
+    };
   } catch {
-    partnerCache = { at: Date.now(), byOsm: new Map() };
+    partnerCache = { at: Date.now(), byOsm: new Map(), own: [] };
   }
-  return partnerCache.byOsm;
+  return partnerCache;
 }
 
 // Every place returned to the AI is remembered so build_itinerary can verify that
@@ -107,14 +120,21 @@ export async function searchPlaces(params: SearchParams): Promise<SearchResult[]
     if (osm.length < 10) osm = mergeOsm(osm, await photonAreaPois(lat, lon, radiusM));
   }
 
-  const partners = await partnersByOsm();
+  const { byOsm, own } = await partners();
   const merged = new Map<string, Place>();
+  // Venues created in the portal: not on the map data, so add them here.
+  for (const m of own) {
+    const category = ((CATEGORIES as readonly string[]).includes(m.category ?? "") ? m.category : "restaurant") as Category;
+    if (kw && !normalizeVi(m.name).includes(kw)) continue;
+    const price = unitPrice({ category });
+    merged.set(m.osmId, { osmId: m.osmId, name: m.name, lat: m.lat!, lon: m.lon!, category, priceUsdc: price.unit, priceSource: price.source, merchantId: m.id, source: "partner" });
+  }
   for (const o of osm) {
     if (merged.has(o.osmId)) continue;
     // Some OSM "names" are really descriptions/reviews — not usable as a place name.
     if (o.name.length > 60) continue;
     const price = unitPrice({ category: o.category });
-    merged.set(o.osmId, { ...o, priceUsdc: price.unit, priceSource: price.source, merchantId: partners.get(o.osmId), source: "osm" });
+    merged.set(o.osmId, { ...o, priceUsdc: price.unit, priceSource: price.source, merchantId: byOsm.get(o.osmId), source: "osm" });
   }
 
   const here: LatLon = { lat, lon };
@@ -129,7 +149,7 @@ export async function searchPlaces(params: SearchParams): Promise<SearchResult[]
 
   // Opening hours (tiles don't carry them): ask Overpass by id for the candidates only.
   results = results.slice(0, limit * 2);
-  const needHours = results.filter((p) => !p.openingHours).map((p) => p.osmId);
+  const needHours = results.filter((p) => p.source === "osm" && !p.openingHours).map((p) => p.osmId);
   if (needHours.length) {
     const hours = await openingHoursFor(needHours, params.osmWaitMs ?? 4000);
     for (const p of results) if (!p.openingHours && hours.has(p.osmId)) p.openingHours = hours.get(p.osmId);

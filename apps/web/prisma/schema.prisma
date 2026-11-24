@@ -25,6 +25,11 @@ model Merchant {
   /// The venue takes bookings and asks for a deposit → its stops are prepaid into the escrow.
   /// Otherwise travellers pay it directly when they arrive (scan its QR).
   prepay        Boolean @default(false)
+  /// Where the venue is and what it is. Venues created in the partner portal (osmId "toura:…")
+  /// are not on OpenStreetMap, so search finds them from these.
+  lat           Float?
+  lon           Float?
+  category      String?
   stops         Stop[]
 }
 

@@ -11,6 +11,16 @@ import QRVoucher from "./QRVoucher";
 import { venuePayload } from "@/lib/venue-qr";
 import { connectWallet, getSession, SESSION_EVENT, type CircleSession } from "@/lib/circle-client";
 import type { MapPlace } from "@/lib/types";
+import dynamic from "next/dynamic";
+import { clientIpLocation } from "@/lib/client-geocode";
+import { CATEGORY_EMOJI } from "@/lib/format";
+import type { Category } from "@/lib/pricing";
+import type { PickPoint } from "./MapPicker";
+
+const MapPicker = dynamic(() => import("./MapPicker"), { ssr: false });
+
+/** Kinds a new venue can be, most common businesses first. */
+const VENUE_KINDS: Category[] = ["restaurant", "cafe", "attraction", "museum", "viewpoint", "beach"];
 
 type Merchant = { id: string; name: string; walletAddress: string; prepay?: boolean };
 type Detail = {
@@ -359,50 +369,101 @@ export default function MerchantClient() {
   );
 }
 
-/** Pick your place from the map data around you and register it to your wallet. */
+/** Put a pin on your venue, then pick it from the map data — or create it if it isn't there yet. */
 function RegisterVenue({ session, onDone }: { session: CircleSession; onDone: (m: Merchant) => void }) {
   const { t } = useI18n();
-  const [state, setState] = useState<"idle" | "locating" | "loading" | "ok" | "nogps" | "error">("idle");
+  const [view, setView] = useState<{ center: PickPoint; zoom: number } | null>(null);
+  const [focusKey, setFocusKey] = useState(0);
+  const pin = useRef<PickPoint | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "ok" | "error">("idle");
   const [places, setPlaces] = useState<MapPlace[]>([]);
   const [filter, setFilter] = useState("");
-  const [pick, setPick] = useState<MapPlace | null>(null);
+  const [pick, setPick] = useState<MapPlace | "new" | null>(null);
+  const [newName, setNewName] = useState("");
+  const [newCat, setNewCat] = useState<Category>("restaurant");
   const [prepay, setPrepay] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [locating, setLocating] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const find = () => {
+  const gpsFix = () =>
+    new Promise<PickPoint | null>((resolve) => {
+      if (!("geolocation" in navigator)) return resolve(null);
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 10_000, maximumAge: 30_000 },
+      );
+    });
+
+  // Start the map where the owner probably is: GPS, else roughly from the network, else the whole country.
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      let p = await gpsFix();
+      let zoom = 17;
+      if (!p) {
+        zoom = 13;
+        try {
+          const j = (await (await fetch("/api/geoip", { cache: "no-store" })).json()) as { lat: number | null; lon: number | null };
+          if (j.lat !== null && j.lon !== null) p = { lat: j.lat, lon: j.lon };
+        } catch {
+          /* ignore */
+        }
+        p ??= await clientIpLocation();
+      }
+      if (!p) {
+        p = { lat: 16.05, lon: 107.5 };
+        zoom = 5;
+      }
+      if (live) setView({ center: p, zoom });
+    })();
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const myLocation = async () => {
+    setLocating(true);
+    setMsg(null);
+    const p = await gpsFix();
+    setLocating(false);
+    if (!p) return setMsg({ ok: false, text: t.regNoGps });
+    setView({ center: p, zoom: 17 });
+    setFocusKey((k) => k + 1);
+  };
+
+  const find = async () => {
+    const at = pin.current;
+    if (!at) return;
     setMsg(null);
     setPick(null);
-    if (!("geolocation" in navigator)) return setState("nogps");
-    setState("locating");
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        setState("loading");
-        try {
-          const { latitude: lat, longitude: lon } = pos.coords;
-          const res = await fetch(`/api/places?lat=${lat}&lon=${lon}&radius=500`, { cache: "no-store" });
-          if (!res.ok) throw new Error(String(res.status));
-          const j = (await res.json()) as { places: MapPlace[] };
-          setPlaces([...j.places].sort((a, b) => (a.distanceM ?? 0) - (b.distanceM ?? 0)));
-          setState("ok");
-        } catch {
-          setState("error");
-        }
-      },
-      () => setState("nogps"),
-      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 0 },
-    );
+    setState("loading");
+    try {
+      const res = await fetch(`/api/places?lat=${at.lat}&lon=${at.lon}&radius=400`, { cache: "no-store" });
+      if (!res.ok) throw new Error(String(res.status));
+      const j = (await res.json()) as { places: MapPlace[] };
+      setPlaces([...j.places].sort((a, b) => (a.distanceM ?? 0) - (b.distanceM ?? 0)));
+      setState("ok");
+    } catch {
+      setState("error");
+    }
   };
 
   const submit = async () => {
     if (!pick) return;
+    const at = pin.current;
+    const body =
+      pick === "new"
+        ? { name: newName.trim(), category: newCat, lat: at?.lat, lon: at?.lon }
+        : { osmId: pick.osmId, lat: pick.lat, lon: pick.lon };
     setBusy(true);
     setMsg(null);
     try {
       const res = await fetch("/api/merchant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userToken: session.userToken, osmId: pick.osmId, lat: pick.lat, lon: pick.lon, prepay }),
+        body: JSON.stringify({ userToken: session.userToken, prepay, ...body }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -421,6 +482,7 @@ function RegisterVenue({ session, onDone }: { session: CircleSession; onDone: (m
 
   const q = filter.trim().toLowerCase();
   const shown = places.filter((p) => !p.merchantId && (!q || p.name.toLowerCase().includes(q)));
+  const canSubmit = pick === "new" ? newName.trim().length >= 2 : !!pick;
 
   return (
     <section className="space-y-3 rounded-2xl border border-line bg-surface p-4">
@@ -428,15 +490,41 @@ function RegisterVenue({ session, onDone }: { session: CircleSession; onDone: (m
         <h2 className="font-bold text-ink">{t.regTitle}</h2>
         <p className="mt-0.5 text-xs text-ink-2">{t.regHint}</p>
       </div>
-      <button
-        type="button"
-        onClick={find}
-        disabled={state === "locating" || state === "loading"}
-        className="min-h-11 rounded-xl border border-accent/50 px-4 text-sm font-semibold text-accent disabled:opacity-50"
-      >
-        {state === "locating" || state === "loading" ? "…" : t.regFind}
-      </button>
-      {state === "nogps" && <p className="text-sm text-warn">{t.regNoGps}</p>}
+
+      <div className="relative h-64 overflow-hidden rounded-xl border border-line bg-bg">
+        {view ? (
+          <MapPicker
+            center={view.center}
+            zoom={view.zoom}
+            focusKey={focusKey}
+            onChange={(p) => {
+              pin.current = p;
+            }}
+            t={t}
+          />
+        ) : (
+          <div className="fx-skeleton absolute inset-0 bg-surface-2" />
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => void myLocation()}
+          disabled={locating || !view}
+          className="min-h-11 rounded-xl border border-line px-3 text-sm font-semibold text-ink disabled:opacity-50"
+        >
+          {locating ? "…" : `◎ ${t.regMyLocation}`}
+        </button>
+        <button
+          type="button"
+          onClick={() => void find()}
+          disabled={state === "loading" || !view}
+          className="min-h-11 flex-1 rounded-xl border border-accent/50 px-4 text-sm font-semibold text-accent disabled:opacity-50"
+        >
+          {state === "loading" ? "…" : t.regFind}
+        </button>
+      </div>
+
       {state === "error" && <p className="text-sm text-danger">{t.poiError}</p>}
       {state === "ok" && (
         <div className="space-y-2">
@@ -450,9 +538,9 @@ function RegisterVenue({ session, onDone }: { session: CircleSession; onDone: (m
           {shown.length === 0 ? (
             <p className="text-sm text-ink-2">{t.regEmpty}</p>
           ) : (
-            <div role="radiogroup" aria-label={t.regTitle} className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+            <div role="radiogroup" aria-label={t.regTitle} className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
               {shown.map((p) => {
-                const on = pick?.osmId === p.osmId;
+                const on = pick !== "new" && pick?.osmId === p.osmId;
                 return (
                   <button
                     key={p.osmId}
@@ -476,6 +564,43 @@ function RegisterVenue({ session, onDone }: { session: CircleSession; onDone: (m
           )}
         </div>
       )}
+
+      {/* A new venue isn't on the map data yet: create it at the pin. */}
+      {pick === "new" ? (
+        <div className="space-y-3 rounded-xl border border-accent/40 bg-accent-soft p-3">
+          <p className="text-xs text-[#c5d8d1]">{t.regNewHint}</p>
+          <label className="block">
+            <span className="text-xs font-semibold text-ink-2">{t.regNewName}</span>
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              maxLength={60}
+              className="mt-1 min-h-[44px] w-full rounded-xl border border-line bg-bg px-3 text-base text-ink"
+            />
+          </label>
+          <fieldset>
+            <legend className="text-xs font-semibold text-ink-2">{t.regNewCategory}</legend>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {VENUE_KINDS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  aria-pressed={newCat === c}
+                  onClick={() => setNewCat(c)}
+                  className={`min-h-10 rounded-full border px-3 text-sm font-semibold ${newCat === c ? "border-accent bg-accent text-accent-ink" : "border-line bg-bg text-ink"}`}
+                >
+                  {CATEGORY_EMOJI[c] ?? "📍"} {t.category[c] ?? c}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setPick("new")} disabled={!view} className="min-h-11 text-left text-sm font-semibold text-accent underline disabled:opacity-50">
+          + {t.regNewToggle}
+        </button>
+      )}
+
       {pick && (
         <div className="space-y-3 border-t border-line pt-3">
           <label className="flex cursor-pointer items-start gap-3">
@@ -488,10 +613,10 @@ function RegisterVenue({ session, onDone }: { session: CircleSession; onDone: (m
           <button
             type="button"
             onClick={() => void submit()}
-            disabled={busy}
+            disabled={busy || !canSubmit}
             className="min-h-11 w-full rounded-xl bg-accent px-4 text-sm font-bold text-accent-ink disabled:opacity-50"
           >
-            {busy ? "…" : `${t.regSubmit}: ${pick.name}`}
+            {busy ? "…" : `${t.regSubmit}: ${pick === "new" ? newName.trim() || "…" : pick.name}`}
           </button>
         </div>
       )}

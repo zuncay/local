@@ -24,7 +24,7 @@ const CUSTOM_TILES = process.env.NEXT_PUBLIC_MAP_TILE_URL;
  * show the style's English credit line, so this replaces it (same CSS classes).
  * The HTML comes from our dictionary only, never from map data.
  */
-class CreditControl implements maplibregl.IControl {
+export class CreditControl implements maplibregl.IControl {
   private el: HTMLElement | null = null;
   constructor(private html: string) {}
   onAdd() {
@@ -40,7 +40,7 @@ class CreditControl implements maplibregl.IControl {
   }
 }
 
-function mapStyle(): string | StyleSpecification {
+export function mapStyle(): string | StyleSpecification {
   if (process.env.NEXT_PUBLIC_MAP_STYLE_URL) return process.env.NEXT_PUBLIC_MAP_STYLE_URL;
   if (CUSTOM_TILES) {
     return {
