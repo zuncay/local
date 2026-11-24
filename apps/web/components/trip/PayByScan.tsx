@@ -6,7 +6,7 @@ import { errorText } from "@/lib/error-text";
 import { usdc } from "@/lib/format";
 import { merchantName } from "@/lib/i18n";
 import type { ItineraryView, StopView } from "@/lib/types";
-import { parseVenue, venuePayload } from "@/lib/venue-qr";
+import { PAY_VENUE_EVENT, parseVenue, venuePayload } from "@/lib/venue-qr";
 import type { Hex } from "viem";
 import { useI18n } from "../I18nProvider";
 import Scanner from "../Scanner";
@@ -90,6 +90,20 @@ export default function PayByScan({
 
   // Opened from the wallet's scanner (/trips/<id>?venue=<merchantId>): handle that venue as if
   // it had just been scanned here, once this device's check-in codes have loaded.
+  // "Pay now" on the live trip card: open this venue's payment directly.
+  const onScanRef = useRef(onScan);
+  onScanRef.current = onScan;
+  useEffect(() => {
+    const open = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (!id) return;
+      accepting.current = true;
+      onScanRef.current(venuePayload(id));
+    };
+    window.addEventListener(PAY_VENUE_EVENT, open);
+    return () => window.removeEventListener(PAY_VENUE_EVENT, open);
+  }, []);
+
   const pendingVenue = useRef<string | null>(null);
   useEffect(() => {
     const url = new URL(window.location.href);

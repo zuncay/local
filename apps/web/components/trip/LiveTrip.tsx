@@ -6,6 +6,7 @@ import { CATEGORY_EMOJI, distance, hhmm } from "@/lib/format";
 import { haversineKm } from "@/lib/geo";
 import { ARRIVE_M, LEAVE_M, readProgress, tripProgress, writeProgress, type LocalProgress } from "@/lib/live-trip";
 import { directionsUrl } from "@/lib/stop-info";
+import { PAY_VENUE_EVENT } from "@/lib/venue-qr";
 import type { ItineraryView, StopView } from "@/lib/types";
 import { useI18n } from "../I18nProvider";
 
@@ -95,7 +96,11 @@ export default function LiveTrip({ it }: { it: ItineraryView }) {
   const finish = (s: StopView) => update((p) => ({ ...p, done: [...p.done, s.id] }));
   // Without (good) GPS — indoors, a laptop, a demo — the traveller says they've arrived.
   const imHere = (s: StopView) => update((p) => ({ ...p, seen: [...p.seen, s.id], here: [...(p.here ?? []), s.id] }));
-  const payNow = () => document.getElementById("pay-by-scan")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  // Straight to paying this venue: the amount to confirm (pay at venue) or the release (prepaid).
+  const payNow = (s: StopView) => {
+    if (s.merchant) window.dispatchEvent(new CustomEvent(PAY_VENUE_EVENT, { detail: s.merchant.id }));
+    document.getElementById("pay-by-scan")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
 
   const center = useMemo(() => ({ lat: it.stops[0].lat, lon: it.stops[0].lon }), [it.stops[0].lat, it.stops[0].lon]); // eslint-disable-line react-hooks/exhaustive-deps
   const live = useMemo(() => ({ doneIds, nextId: target?.id ?? null }), [doneIds.join(","), target?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -146,8 +151,8 @@ export default function LiveTrip({ it }: { it: ItineraryView }) {
             </div>
             {owes(target) ? (
               <>
-                <button type="button" onClick={payNow} className="fx-shine min-h-12 w-full rounded-xl bg-accent px-4 text-sm font-bold text-accent-ink">
-                  {t.livePayNow}
+                <button type="button" onClick={() => payNow(target)} className="fx-shine min-h-12 w-full rounded-xl bg-accent px-4 text-sm font-bold text-accent-ink">
+                  {(target.payMode === "ESCROW" ? t.liveReleaseVenue : t.livePayVenue).replace("{name}", target.merchant?.name ?? target.name)}
                 </button>
                 <button type="button" onClick={() => finish(target)} className="min-h-10 w-full text-xs font-semibold text-ink-2 underline">
                   {t.liveSkip}
